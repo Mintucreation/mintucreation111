@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>Dealer Customer Record</title>
+
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0f172a" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="DCR" />
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+  html, body { margin: 0; background: #0f172a; }
+  #boot-error {
+    display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: #fef2f2; color: #b91c1c; border-bottom: 1px solid #fecaca;
+    font: 13px/1.5 -apple-system, system-ui, sans-serif; padding: 10px 14px;
+  }
+  @keyframes shine { 0% { background-position: -150% 0; } 100% { background-position: 250% 0; } }
+  .badge-shine {
+    background: linear-gradient(120deg, #059669 0%, #10b981 35%, #6ee7b7 50%, #10b981 65%, #059669 100%);
+    background-size: 250% 100%;
+    animation: shine 3.5s ease-in-out infinite;
+  }
+  @keyframes floaty { 0%, 100% { transform: translateY(0) rotateZ(0deg); } 50% { transform: translateY(-5px) rotateZ(0.6deg); } }
+  .badge-float { animation: floaty 4.5s ease-in-out infinite; }
+  .glass-card { background: rgba(255,255,255,0.97); backdrop-filter: blur(6px); }
+  .btn-3d { transition: transform 0.08s ease, box-shadow 0.08s ease; }
+  .btn-3d:active { transform: translateY(3px); }
+</style>
+</head>
+<body>
+<div id="boot-error"></div>
+<div id="root">
+  <div style="padding:40px;text-align:center;color:#94a3b8;font:14px -apple-system,system-ui,sans-serif;">Loading…</div>
+</div>
+
+<script>
+  window.addEventListener("error", function (e) {
+    var el = document.getElementById("boot-error");
+    if (el) {
+      el.style.display = "block";
+      el.textContent = "Something failed to load: " + (e.message || "unknown error") + ". Check your internet connection and reload.";
+    }
+  });
+</script>
+
+<script>
+"use strict";
+var e = React.createElement;
+var useState = React.useState;
+var useEffect = React.useEffect;
+var useMemo = React.useMemo;
+
+/* ===================== Supabase client ===================== */
+var SUPABASE_URL = "https://zlfpaevyoiotyuafuewd.supabase.co";
+var SUPABASE_ANON_KEY = "sb_publishable_d1a95a7ntNPZDiMlleRbdA_86VOPMBk";
+var sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ===================== Constants ===================== */
+var SETTINGS_KEY = "dcr_settings_v1"; // recipient email is a per-device convenience, kept local
+
+var FIELDS_TOP = [
+  { key: "invoiceNo", label: "Invoice no", type: "text", placeholder: "e.g. INV-2026-001" },
+  { key: "invoiceDate", label: "Invoice date", type: "date" },
+  { key: "customerName", label: "Customer name", type: "text", placeholder: "e.g. Rajesh Kalita" },
+  { key: "mobileNumber", label: "Mobile number", type: "text", placeholder: "e.g. 9435012345" },
+  { key: "rcNo", label: "RC no", type: "text", placeholder: "e.g. AS12AB1234" },
+  { key: "registrationDate", label: "Registration date", type: "date" },
+  { key: "downPayment", label: "Down payment received", type: "number" },
+  { key: "exShowroomAmount", label: "Ex-showroom amount", type: "number" },
+  { key: "insuranceAmount", label: "Insurance amount", type: "number" },
+  { key: "registrationAmount", label: "Registration amount", type: "number" }
+];
+var FIELDS_BOTTOM = [
+  { key: "loanBank", label: "Loan bank", type: "text", placeholder: "e.g. HDFC Bank / Cash" },
+  { key: "disbursementAmount", label: "Disbursement amount", type: "number" },
+  { key: "disbursementDate", label: "Disbursement date", type: "date" }
+];
+var FIELDS = FIELDS_TOP.concat([{ key: "totalVehicleCost", label: "Total vehicle cost", type: "number" }], FIELDS_BOTTOM);
+var ACCESSORY_SLOTS = 6;
+
+/* ===================== Helpers ===================== */
+function makeEmptyAccessories() {
+  var out = [];
+  for (var i = 0; i < ACCESSORY_SLOTS; i++) out.push({ name: "", amount: "" });
+  return out;
+}
+function accessoriesTotalOf(accessories) {
+  if (!Array.isArray(accessories)) return 0;
+  var sum = 0;
+  for (var i = 0; i < accessories.length; i++) sum += parseFloat(accessories[i] && accessories[i].amount) || 0;
+  return sum;
+}
+function computeTotalVehicleCost(form) {
+  var exShowroom = parseFloat(form.exShowroomAmount) || 0;
+  var insurance = parseFloat(form.insuranceAmount) || 0;
+  var registration = parseFloat(form.registrationAmount) || 0;
+  return exShowroom + insurance + registration + accessoriesTotalOf(form.accessories);
+}
+function totalReceivedOf(obj) { return (parseFloat(obj.downPayment) || 0) + (parseFloat(obj.disbursementAmount) || 0); }
+function differenceOf(obj) { return (parseFloat(obj.totalVehicleCost) || 0) - totalReceivedOf(obj); }
+function monthOf(dateStr) { return dateStr && dateStr.length >= 7 ? dateStr.slice(0, 7) : ""; }
+function yearOf(dateStr) { return dateStr && dateStr.length >= 4 ? dateStr.slice(0, 4) : ""; }
+function makeEmptyForm() {
+  var f = {};
+  for (var i = 0; i < FIELDS.length; i++) f[FIELDS[i].key] = "";
+  f.accessories = makeEmptyAccessories();
+  return f;
+}
+function formatMoney(n) {
+  var num = Number(n) || 0;
+  return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+/* ---- Reminder: flag records with blank required fields (accessories excluded) ---- */
+var REMINDER_KEY = "dcr_last_reminder_v1";
+var REMINDER_INTERVAL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+var REQUIRED_FOR_REMINDER = [
+  { key: "customerName", label: "Customer name" },
+  { key: "mobileNumber", label: "Mobile number" },
+  { key: "rcNo", label: "RC no" },
+  { key: "registrationDate", label: "Registration date" },
+  { key: "downPayment", label: "Down payment" },
+  { key: "exShowroomAmount", label: "Ex-showroom amount" },
+  { key: "insuranceAmount", label: "Insurance amount" },
+  { key: "registrationAmount", label: "Registration amount" },
+  { key: "loanBank", label: "Loan bank" },
+  { key: "disbursementAmount", label: "Disbursement amount" },
+  { key: "disbursementDate", label: "Disbursement date" }
+];
+function missingFieldsOf(entry) {
+  var missing = [];
+  for (var i = 0; i < REQUIRED_FOR_REMINDER.length; i++) {
+    var f = REQUIRED_FOR_REMINDER[i];
+    var v = entry[f.key];
+    if (v === undefined || v === null || v === "" || v === 0) missing.push(f.label);
+  }
+  return missing;
+}
+function getIncompleteEntries(entries) {
+  return entries.map(function (en) { return { entry: en, missing: missingFieldsOf(en) }; })
+    .filter(function (x) { return x.missing.length > 0; });
+}
+function getLastReminderTime() {
+  try { var raw = localStorage.getItem(REMINDER_KEY); return raw ? parseInt(raw, 10) : 0; } catch (err) { return 0; }
+}
+function setLastReminderTime(t) { try { localStorage.setItem(REMINDER_KEY, String(t)); } catch (err) {} }
+
+/* ---- Import: parse an exported Excel file back into app rows ---- */
+function normalizeDateCell(val) {
+  if (!val && val !== 0) return "";
+  if (val instanceof Date) return val.toISOString().slice(0, 10);
+  var s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return s;
+}
+function parseAccessoriesDetails(str) {
+  var out = makeEmptyAccessories();
+  if (!str) return out;
+  var parts = String(str).split(";").map(function (p) { return p.trim(); }).filter(Boolean);
+  for (var i = 0; i < parts.length && i < ACCESSORY_SLOTS; i++) {
+    var m = parts[i].match(/^(.*):\s*Rs\.?\s*([\d,]+(?:\.\d+)?)/i);
+    if (m) out[i] = { name: m[1].trim(), amount: m[2].replace(/,/g, "") };
+    else out[i] = { name: parts[i], amount: "" };
+  }
+  return out;
+}
+function formFromImportedRow(row) {
+  var f = makeEmptyForm();
+  f.customerName = String(row["Customer name"] || "").trim();
+  f.mobileNumber = String(row["Mobile number"] || "").trim();
+  f.rcNo = String(row["RC no"] || "").trim();
+  f.invoiceNo = String(row["Invoice no"] || "").trim();
+  f.invoiceDate = normalizeDateCell(row["Invoice date"]);
+  f.registrationDate = normalizeDateCell(row["Registration date"]);
+  f.downPayment = row["Down payment received"] || "";
+  f.exShowroomAmount = row["Ex-showroom amount"] || "";
+  f.insuranceAmount = row["Insurance amount"] || "";
+  f.registrationAmount = row["Registration amount"] || "";
+  f.accessories = parseAccessoriesDetails(row["Accessories details"]);
+  f.loanBank = String(row["Loan bank"] || "").trim();
+  f.disbursementAmount = row["Disbursement amount"] || "";
+  f.disbursementDate = normalizeDateCell(row["Disbursement date"]);
+  return f;
+}
+function loadSettings() {
+  try { var raw = localStorage.getItem(SETTINGS_KEY); return raw ? JSON.parse(raw) : { recipientEmail: "" }; }
+  catch (err) { return { recipientEmail: "" }; }
+}
+function saveSettings(s) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (err) {} }
+
+/* ---- DB row <-> app form field mapping ---- */
+function toDbRow(form) {
+  return {
+    customer_name: form.customerName,
+    mobile_number: form.mobileNumber,
+    rc_no: form.rcNo || null,
+    invoice_no: form.invoiceNo || null,
+    invoice_date: form.invoiceDate || null,
+    registration_date: form.registrationDate || null,
+    down_payment: parseFloat(form.downPayment) || 0,
+    ex_showroom_amount: parseFloat(form.exShowroomAmount) || 0,
+    insurance_amount: parseFloat(form.insuranceAmount) || 0,
+    registration_amount: parseFloat(form.registrationAmount) || 0,
+    accessories: (form.accessories || []).filter(function (a) { return a && (a.name || a.amount); }),
+    total_vehicle_cost: computeTotalVehicleCost(form),
+    loan_bank: form.loanBank || null,
+    disbursement_amount: parseFloat(form.disbursementAmount) || 0,
+    disbursement_date: form.disbursementDate || null
+  };
+}
+function fromDbRow(row) {
+  var accessories = Array.isArray(row.accessories) ? row.accessories.slice() : [];
+  while (accessories.length < ACCESSORY_SLOTS) accessories.push({ name: "", amount: "" });
+  return {
+    id: row.id,
+    customerName: row.customer_name || "",
+    mobileNumber: row.mobile_number || "",
+    rcNo: row.rc_no || "",
+    invoiceNo: row.invoice_no || "",
+    invoiceDate: row.invoice_date || "",
+    registrationDate: row.registration_date || "",
+    downPayment: row.down_payment || "",
+    exShowroomAmount: row.ex_showroom_amount || "",
+    insuranceAmount: row.insurance_amount || "",
+    registrationAmount: row.registration_amount || "",
+    accessories: accessories,
+    totalVehicleCost: row.total_vehicle_cost || 0,
+    loanBank: row.loan_bank || "",
+    disbursementAmount: row.disbursement_amount || "",
+    disbursementDate: row.disbursement_date || ""
+  };
+}
+
+var inputClass = "w-full border border-slate-200 rounded-lg px-2.5 py-2.5 text-base text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-colors";
+var btnPrimary = "btn-3d flex items-center justify-center gap-2 bg-gradient-to-b from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-[0_4px_0_#065f46,0_8px_16px_rgba(0,0,0,0.25)] active:shadow-[0_1px_0_#065f46] min-h-[44px]";
+var btnDark = "btn-3d flex items-center justify-center gap-2 bg-gradient-to-b from-slate-700 to-slate-900 hover:from-slate-600 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-[0_4px_0_#020617,0_8px_16px_rgba(0,0,0,0.3)] active:shadow-[0_1px_0_#020617] min-h-[44px]";
+var btnGhost = "btn-3d flex items-center justify-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-sm font-medium px-3 py-2.5 rounded-xl shadow-[0_2px_0_#e2e8f0] active:shadow-none min-h-[44px]";
+
+function LabeledInput(props) {
+  var f = props.field;
+  return e("div", { key: f.key },
+    e("label", { className: "text-xs font-medium text-slate-500 mb-1 block" }, f.label),
+    e("input", {
+      type: f.type, placeholder: f.placeholder,
+      min: f.type === "number" ? "0" : undefined, step: f.type === "number" ? "0.01" : undefined,
+      value: props.value, onChange: function (ev) { props.onChange(f.key, ev.target.value); },
+      className: inputClass
+    })
+  );
+}
+
+function Badge3D(props) {
+  var size = props.size || 64;
+  return e("div", {
+    className: "badge-shine badge-float rounded-2xl flex items-center justify-center select-none",
+    style: { width: size, height: size, boxShadow: "0 10px 20px rgba(5,150,105,0.35), 0 4px 8px rgba(0,0,0,0.25), inset 0 2px 2px rgba(255,255,255,0.4), inset 0 -3px 4px rgba(0,0,0,0.25)" }
+  }, e("span", { className: "text-white font-extrabold", style: { fontSize: size * 0.34, textShadow: "0 2px 3px rgba(0,0,0,0.35)" } }, "DCR"));
+}
+
+function ISTClock() {
+  var nowState = useState(new Date()); var now = nowState[0], setNow = nowState[1];
+  useEffect(function () {
+    var id = setInterval(function () { setNow(new Date()); }, 1000);
+    return function () { clearInterval(id); };
+  }, []);
+  var timeStr = now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+  var dateStr = now.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+  return e("div", {
+    className: "glass-card rounded-xl px-4 py-2 flex flex-col items-center justify-center select-none border border-emerald-100",
+    style: { boxShadow: "0 4px 10px rgba(0,0,0,0.06), inset 0 1px 1px rgba(255,255,255,0.9)" }
+  },
+    e("span", { className: "font-mono text-emerald-700 font-bold tracking-wider text-lg" }, timeStr),
+    e("span", { className: "text-[10px] text-slate-400 mt-0.5" }, dateStr + " IST")
+  );
+}
+
+/* ===================== Auth Screen (real Supabase auth) ===================== */
+function AuthScreen(props) {
+  var emailState = useState(""); var email = emailState[0], setEmail = emailState[1];
+  var pwState = useState(""); var pw = pwState[0], setPw = pwState[1];
+  var errState = useState(""); var err = errState[0], setErr = errState[1];
+  var infoState = useState(""); var info = infoState[0], setInfo = infoState[1];
+  var busyState = useState(false); var busy = busyState[0], setBusy = busyState[1];
+
+  async function handleLogin() {
+    setErr(""); setInfo("");
+    if (!email.trim() || !pw) { setErr("Enter your email and password."); return; }
+    setBusy(true);
+    var result = await sb.auth.signInWithPassword({ email: email.trim(), password: pw });
+    setBusy(false);
+    if (result.error) { setErr(result.error.message); return; }
+    props.onLoginSuccess();
+  }
+
+  async function handleForgotPassword() {
+    setErr(""); setInfo("");
+    if (!email.trim()) { setErr("Enter your email above first, then tap this again."); return; }
+    setBusy(true);
+    var result = await sb.auth.resetPasswordForEmail(email.trim());
+    setBusy(false);
+    if (result.error) { setErr(result.error.message); return; }
+    setInfo("Password reset email sent (if that address has an account). Check your inbox.");
+  }
+
+  var card = e("div", {
+    className: "glass-card w-full max-w-sm rounded-2xl p-6",
+    style: { boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5), 0 10px 20px rgba(0,0,0,0.3)" }
+  },
+    e("div", { className: "flex flex-col items-center mb-5" },
+      e(Badge3D, { size: 68 }),
+      e("h1", { className: "mt-3 text-lg font-bold text-slate-800" }, "Dealer Customer Record"),
+      e("p", { className: "text-xs text-slate-400 mt-0.5" }, "Log in to access your shared records")
+    ),
+    e("div", { className: "space-y-3" },
+      e("div", null,
+        e("label", { className: "text-xs font-medium text-slate-500 mb-1 block" }, "Email"),
+        e("input", { type: "email", value: email, onChange: function (ev) { setEmail(ev.target.value); }, className: inputClass, placeholder: "you@business.com" })
+      ),
+      e("div", null,
+        e("label", { className: "text-xs font-medium text-slate-500 mb-1 block" }, "Password"),
+        e("input", {
+          type: "password", value: pw, onChange: function (ev) { setPw(ev.target.value); }, className: inputClass,
+          onKeyDown: function (ev) { if (ev.key === "Enter") handleLogin(); }
+        })
+      ),
+      err ? e("p", { className: "text-xs text-rose-600" }, err) : null,
+      info ? e("p", { className: "text-xs text-emerald-600" }, info) : null,
+      e("button", { onClick: handleLogin, disabled: busy, className: btnPrimary + " w-full mt-1" }, busy ? "Checking…" : "Log in"),
+      e("div", { className: "text-center mt-2" },
+        e("button", { onClick: handleForgotPassword, disabled: busy, className: "text-xs text-slate-400 hover:text-slate-600 underline" }, "Forgot password?")
+      ),
+      e("p", { className: "text-[11px] text-slate-400 text-center mt-2" }, "New staff accounts are added from the Supabase dashboard by the account owner.")
+    )
+  );
+
+  return e("div", { className: "min-h-screen flex items-center justify-center p-4", style: { background: "radial-gradient(circle at 30% 20%, #1e293b, #0f172a 60%)" } }, card);
+}
+
+/* ===================== Main App ===================== */
+function MainApp(props) {
+  var userEmail = props.userEmail;
+  var onLogout = props.onLogout;
+
+  var entriesState = useState([]); var entries = entriesState[0], setEntries = entriesState[1];
+  var loadedState = useState(false); var loaded = loadedState[0], setLoaded = loadedState[1];
+  var errorState = useState(""); var error = errorState[0], setError = errorState[1];
+  var infoState = useState(""); var info = infoState[0], setInfo = infoState[1];
+  var formState = useState(makeEmptyForm()); var form = formState[0], setForm = formState[1];
+  var editingIdState = useState(null); var editingId = editingIdState[0], setEditingId = editingIdState[1];
+  var queryState = useState(""); var query = queryState[0], setQuery = queryState[1];
+  var lookupState = useState(""); var lookup = lookupState[0], setLookup = lookupState[1];
+  var exportMonthState = useState(""); var exportMonth = exportMonthState[0], setExportMonth = exportMonthState[1];
+  var settingsState = useState({ recipientEmail: "" }); var settings = settingsState[0], setSettings = settingsState[1];
+  var sendingState = useState(false); var sending = sendingState[0], setSending = sendingState[1];
+  var savingState = useState(false); var saving = savingState[0], setSaving = savingState[1];
+  var reminderVisibleState = useState(false); var reminderVisible = reminderVisibleState[0], setReminderVisible = reminderVisibleState[1];
+  var importingState = useState(false); var importing = importingState[0], setImporting = importingState[1];
+  var fileInputRef = React.useRef ? React.useRef(null) : { current: null };
+  var viewState = useState("dashboard"); var view = viewState[0], setView = viewState[1];
+  var detailsFilterModeState = useState("all"); var detailsFilterMode = detailsFilterModeState[0], setDetailsFilterMode = detailsFilterModeState[1];
+  var detailsFilterValueState = useState(""); var detailsFilterValue = detailsFilterValueState[0], setDetailsFilterValue = detailsFilterValueState[1];
+  var detailsViewModeState = useState("list"); var detailsViewMode = detailsViewModeState[0], setDetailsViewMode = detailsViewModeState[1];
+
+  async function refreshEntries() {
+    var result = await sb.from("customers").select("*").order("created_at", { ascending: false });
+    if (result.error) { setError("Could not load records: " + result.error.message); return; }
+    setEntries(result.data.map(fromDbRow));
+  }
+
+  useEffect(function () {
+    setSettings(loadSettings());
+    refreshEntries().then(function () { setLoaded(true); });
+  }, []);
+
+  var incomplete = useMemo(function () { return getIncompleteEntries(entries); }, [entries]);
+
+  useEffect(function () {
+    if (!loaded) return;
+    if (incomplete.length === 0) return;
+    var last = getLastReminderTime();
+    if (Date.now() - last >= REMINDER_INTERVAL_MS) setReminderVisible(true);
+  }, [loaded, incomplete.length]);
+
+  function dismissReminder() {
+    setLastReminderTime(Date.now());
+    setReminderVisible(false);
+  }
+
+  function resetForm() { setForm(makeEmptyForm()); setEditingId(null); }
+  function setField(key, value) { setForm(function (prev) { var next = Object.assign({}, prev); next[key] = value; return next; }); }
+  function updateAccessory(index, key, value) {
+    setForm(function (prev) {
+      var next = prev.accessories.map(function (a, i) {
+        if (i !== index) return a;
+        var copy = Object.assign({}, a); copy[key] = value; return copy;
+      });
+      return Object.assign({}, prev, { accessories: next });
+    });
+  }
+  function updateRecipientEmail(val) {
+    var next = Object.assign({}, settings, { recipientEmail: val });
+    setSettings(next); saveSettings(next);
+  }
+
+  async function saveEntry() {
+    if (!form.customerName.trim() || !form.mobileNumber.trim()) { setError("Customer name and mobile number are required."); return; }
+    setSaving(true); setError("");
+    var row = toDbRow(form);
+    if (editingId) {
+      var result = await sb.from("customers").update(row).eq("id", editingId).select();
+      setSaving(false);
+      if (result.error) { setError("Could not save: " + result.error.message); return; }
+      await refreshEntries();
+    } else {
+      var result2 = await sb.from("customers").insert([row]).select();
+      setSaving(false);
+      if (result2.error) { setError("Could not save: " + result2.error.message); return; }
+      await refreshEntries();
+    }
+    resetForm();
+    setInfo("Saved.");
+  }
+
+  function editEntry(entry) {
+    var rest = Object.assign({}, entry); delete rest.id;
+    var accessories = Array.isArray(rest.accessories) && rest.accessories.length === ACCESSORY_SLOTS ? rest.accessories : (function () {
+      var a = (rest.accessories || []).slice();
+      while (a.length < ACCESSORY_SLOTS) a.push({ name: "", amount: "" });
+      return a;
+    })();
+    setForm(Object.assign({}, makeEmptyForm(), rest, { accessories: accessories }));
+    setEditingId(entry.id);
+    setView("dashboard");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function deleteEntry(id) {
+    if (!window.confirm("Delete this record? This can't be undone.")) return;
+    var result = await sb.from("customers").delete().eq("id", id);
+    if (result.error) { setError("Could not delete: " + result.error.message); return; }
+    await refreshEntries();
+    if (editingId === id) resetForm();
+  }
+
+  var lookupResults = useMemo(function () {
+    var q = lookup.trim().toLowerCase();
+    if (!q) return [];
+    return entries.filter(function (en) {
+      return (en.mobileNumber || "").toLowerCase().indexOf(q) !== -1 ||
+             (en.rcNo || "").toLowerCase().indexOf(q) !== -1 ||
+             (en.invoiceNo || "").toLowerCase().indexOf(q) !== -1;
+    });
+  }, [entries, lookup]);
+
+  var formAccessoriesTotal = useMemo(function () { return accessoriesTotalOf(form.accessories); }, [form.accessories]);
+  var formTotalVehicleCost = useMemo(function () { return computeTotalVehicleCost(form); }, [form]);
+  var formTotalReceived = useMemo(function () { return totalReceivedOf(form); }, [form.downPayment, form.disbursementAmount]);
+  var formDifference = formTotalVehicleCost - formTotalReceived;
+
+  var filtered = useMemo(function () {
+    var q = query.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(function (en) {
+      return (en.customerName || "").toLowerCase().indexOf(q) !== -1 ||
+             (en.mobileNumber || "").toLowerCase().indexOf(q) !== -1 ||
+             (en.rcNo || "").toLowerCase().indexOf(q) !== -1 ||
+             (en.invoiceNo || "").toLowerCase().indexOf(q) !== -1 ||
+             (en.loanBank || "").toLowerCase().indexOf(q) !== -1;
+    });
+  }, [entries, query]);
+
+  var availableYears = useMemo(function () {
+    var set = {};
+    entries.forEach(function (en) {
+      var y1 = yearOf(en.registrationDate), y2 = yearOf(en.disbursementDate), y3 = yearOf(en.invoiceDate);
+      if (y1) set[y1] = true;
+      if (y2) set[y2] = true;
+      if (y3) set[y3] = true;
+    });
+    return Object.keys(set).sort().reverse();
+  }, [entries]);
+
+  var detailsFiltered = useMemo(function () {
+    if (detailsFilterMode === "all" || !detailsFilterValue) return entries;
+    return entries.filter(function (en) {
+      if (detailsFilterMode === "year") return yearOf(en.registrationDate) === detailsFilterValue || yearOf(en.disbursementDate) === detailsFilterValue || yearOf(en.invoiceDate) === detailsFilterValue;
+      if (detailsFilterMode === "month") return monthOf(en.registrationDate) === detailsFilterValue || monthOf(en.disbursementDate) === detailsFilterValue || monthOf(en.invoiceDate) === detailsFilterValue;
+      if (detailsFilterMode === "date") return en.registrationDate === detailsFilterValue || en.disbursementDate === detailsFilterValue || en.invoiceDate === detailsFilterValue;
+      return true;
+    });
+  }, [entries, detailsFilterMode, detailsFilterValue]);
+
+  function buildWorkbook(monthFilter) {
+    var rowsSource = entries;
+    if (monthFilter) rowsSource = entries.filter(function (en) { return monthOf(en.registrationDate) === monthFilter || monthOf(en.disbursementDate) === monthFilter || monthOf(en.invoiceDate) === monthFilter; });
+    if (rowsSource.length === 0) return null;
+    var rows = rowsSource.map(function (en) {
+      var accDetails = (en.accessories || []).filter(function (a) { return a && (a.name || a.amount); })
+        .map(function (a) { return (a.name || "Item") + ": Rs." + formatMoney(a.amount || 0); }).join("; ");
+      return {
+        "Invoice no": en.invoiceNo, "Invoice date": en.invoiceDate, "Customer name": en.customerName, "Mobile number": en.mobileNumber, "RC no": en.rcNo,
+        "Registration date": en.registrationDate,
+        "Down payment received": en.downPayment, "Ex-showroom amount": en.exShowroomAmount, "Insurance amount": en.insuranceAmount,
+        "Registration amount": en.registrationAmount, "Accessories amount": accessoriesTotalOf(en.accessories), "Accessories details": accDetails,
+        "Total vehicle cost": en.totalVehicleCost, "Loan bank": en.loanBank, "Disbursement amount": en.disbursementAmount,
+        "Disbursement date": en.disbursementDate, "Total amount received": totalReceivedOf(en), "Difference": differenceOf(en)
+      };
+    });
+    var ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 40 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 16 }];
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Customers");
+    return wb;
+  }
+
+  function exportToExcel(monthFilter) {
+    if (typeof XLSX === "undefined") { setError("Export library failed to load. Check your internet connection and reload."); return; }
+    var wb = buildWorkbook(monthFilter);
+    if (!wb) { setError(monthFilter ? "No records found for that month." : "No records to export yet."); return; }
+    var suffix = monthFilter ? "-" + monthFilter : "";
+    XLSX.writeFile(wb, "dealer-customer-records" + suffix + "-" + todayISO() + ".xlsx");
+    setError(""); setInfo("Excel file downloaded.");
+  }
+
+  async function emailExcel(monthFilter) {
+    setError(""); setInfo("");
+    if (typeof XLSX === "undefined") { setError("Export library failed to load. Check your internet connection and reload."); return; }
+    var wb = buildWorkbook(monthFilter);
+    if (!wb) { setError(monthFilter ? "No records found for that month." : "No records to export yet."); return; }
+    var filename = "dealer-customer-records" + (monthFilter ? "-" + monthFilter : "") + "-" + todayISO() + ".xlsx";
+    setSending(true);
+    try {
+      var wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      var blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      var file = new File([blob], filename, { type: blob.type });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Dealer Customer Records", text: "Customer records export." });
+        setInfo("Shared. Pick your email app from the share menu to send it.");
+      } else {
+        XLSX.writeFile(wb, filename);
+        var subject = encodeURIComponent("Dealer Customer Records");
+        var body = encodeURIComponent("The Excel file (" + filename + ") just downloaded. Please attach it to this email before sending.");
+        var to = settings.recipientEmail ? encodeURIComponent(settings.recipientEmail) : "";
+        window.location.href = "mailto:" + to + "?subject=" + subject + "&body=" + body;
+        setInfo("File downloaded and your email app is opening — please attach the file manually.");
+      }
+    } catch (err) {
+      if (err && err.name !== "AbortError") setError("Could not share the file. Try Export instead and attach it manually.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function handleImportFile(ev) {
+    var file = ev.target.files && ev.target.files[0];
+    ev.target.value = ""; // allow re-importing the same file later
+    if (!file) return;
+    if (typeof XLSX === "undefined") { setError("Import library failed to load. Check your internet connection and reload."); return; }
+    setError(""); setInfo(""); setImporting(true);
+    var reader = new FileReader();
+    reader.onerror = function () { setImporting(false); setError("Could not read the file."); };
+    reader.onload = async function (e2) {
+      try {
+        var data = new Uint8Array(e2.target.result);
+        var wb = XLSX.read(data, { type: "array" });
+        var sheetName = wb.SheetNames[0];
+        var rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+        var dbRows = [];
+        var skipped = 0;
+        for (var i = 0; i < rows.length; i++) {
+          var form = formFromImportedRow(rows[i]);
+          if (!form.customerName.trim() || !form.mobileNumber.trim()) { skipped++; continue; }
+          dbRows.push(toDbRow(form));
+        }
+        if (dbRows.length === 0) {
+          setImporting(false);
+          setError("No valid rows found to import (each row needs at least Customer name and Mobile number).");
+          return;
+        }
+        var result = await sb.from("customers").insert(dbRows);
+        setImporting(false);
+        if (result.error) { setError("Import failed: " + result.error.message); return; }
+        await refreshEntries();
+        setInfo("Imported " + dbRows.length + " record(s)." + (skipped > 0 ? " Skipped " + skipped + " row(s) missing customer name or mobile number." : ""));
+      } catch (err) {
+        setImporting(false);
+        setError("Could not read that file. Make sure it's an Excel file exported from this app.");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  if (!loaded) return e("div", { className: "flex items-center justify-center py-16 text-slate-400" }, "Loading your records…");
+
+  var header = e("div", { className: "flex flex-col gap-3 mb-5" },
+    e("div", { className: "flex items-center justify-between gap-3 flex-wrap" },
+      e("div", { className: "flex items-center gap-3" },
+        e(Badge3D, { size: 44 }),
+        e("div", null,
+          e("h1", { className: "text-xl font-bold text-slate-800" }, "Dealer Customer Record"),
+          e("p", { className: "text-xs text-slate-400" }, "Signed in as ", e("span", { className: "font-medium text-slate-500" }, userEmail), " · shared with your team")
+        )
+      ),
+      e("div", { className: "flex items-center gap-3 flex-wrap" },
+        e(ISTClock, null),
+        e("button", { onClick: function () { setView(view === "details" ? "dashboard" : "details"); }, className: btnGhost }, view === "details" ? "← Back" : "📋 Details"),
+        e("button", { onClick: onLogout, className: btnGhost }, "🔒 Log out")
+      )
+    ),
+    e("div", { className: "glass-card rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-2 shadow-[0_10px_25px_rgba(0,0,0,0.15)]" },
+      e("input", {
+        type: "email", placeholder: "Email to send Excel to (e.g. you@business.com)", value: settings.recipientEmail,
+        onChange: function (ev) { updateRecipientEmail(ev.target.value); },
+        className: "flex-1 border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+      }),
+      e("div", { className: "flex items-center gap-2 flex-wrap" },
+        e("input", { type: "month", value: exportMonth, onChange: function (ev) { setExportMonth(ev.target.value); }, className: "border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400" }),
+        e("button", { onClick: function () { exportToExcel(exportMonth); }, disabled: !exportMonth, className: btnGhost + " !py-2 !min-h-0 text-xs" }, "⬇ Month"),
+        e("button", { onClick: function () { exportToExcel(); }, className: btnDark + " !py-2 !min-h-0 text-xs" }, "⬇ Export all"),
+        e("button", { onClick: function () { emailExcel(exportMonth || undefined); }, disabled: sending, className: btnPrimary + " !py-2 !min-h-0 text-xs" }, sending ? "Sending…" : "✉ Email Excel"),
+        e("input", { type: "file", accept: ".xlsx,.xls", ref: fileInputRef, onChange: handleImportFile, style: { display: "none" } }),
+        e("button", {
+          onClick: function () { if (fileInputRef.current) fileInputRef.current.click(); },
+          disabled: importing,
+          className: btnGhost + " !py-2 !min-h-0 text-xs"
+        }, importing ? "Importing…" : "⬆ Import Excel")
+      )
+    ),
+    e("button", { onClick: refreshEntries, className: "text-xs text-slate-400 hover:text-slate-600 self-start underline" }, "↻ Refresh (see the latest from your team)"),
+    (error || info) ? e("p", { className: "text-xs " + (error ? "text-rose-300" : "text-emerald-300") }, error || info) : null
+  );
+
+  function detailRow(label, value, negative) {
+    return e("div", { key: label }, e("span", { className: "text-slate-400" }, label + ": "), e("span", { className: negative ? "text-rose-600 font-semibold" : "text-slate-700" }, value));
+  }
+
+  function buildEntryCard(en) {
+    var diff = differenceOf(en);
+    var accItems = (en.accessories || []).filter(function (a) { return a && (a.name || a.amount); });
+    var children = [
+      e("div", { key: "hd", className: "flex items-center justify-between mb-2" },
+        e("p", { className: "text-sm font-semibold text-slate-800" }, en.customerName),
+        e("div", { className: "flex items-center gap-3" },
+          e("button", { onClick: function () { editEntry(en); }, className: "text-slate-400 hover:text-slate-600 p-1.5 -m-1.5" }, "✏️"),
+          e("button", { onClick: function () { deleteEntry(en.id); }, className: "text-slate-400 hover:text-rose-600 p-1.5 -m-1.5" }, "🗑️")
+        )
+      ),
+      e("div", { key: "grid", className: "grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 text-xs" },
+        detailRow("Invoice no", en.invoiceNo || "—"),
+        detailRow("Invoice date", en.invoiceDate || "—"),
+        detailRow("Mobile", en.mobileNumber || "—"), detailRow("RC no", en.rcNo || "—"),
+        detailRow("Reg. date", en.registrationDate || "—"), detailRow("Down payment", en.downPayment ? "₹" + formatMoney(en.downPayment) : "—"),
+        detailRow("Ex-showroom", en.exShowroomAmount ? "₹" + formatMoney(en.exShowroomAmount) : "—"),
+        detailRow("Insurance", en.insuranceAmount ? "₹" + formatMoney(en.insuranceAmount) : "—"),
+        detailRow("Registration amt", en.registrationAmount ? "₹" + formatMoney(en.registrationAmount) : "—"),
+        detailRow("Accessories", accessoriesTotalOf(en.accessories) ? "₹" + formatMoney(accessoriesTotalOf(en.accessories)) : "—"),
+        detailRow("Vehicle cost", en.totalVehicleCost ? "₹" + formatMoney(en.totalVehicleCost) : "—"),
+        detailRow("Loan bank", en.loanBank || "—"), detailRow("Disb. amount", en.disbursementAmount ? "₹" + formatMoney(en.disbursementAmount) : "—"),
+        detailRow("Disb. date", en.disbursementDate || "—"), detailRow("Total received", "₹" + formatMoney(totalReceivedOf(en))),
+        detailRow("Difference", (diff < 0 ? "-" : "") + "₹" + formatMoney(Math.abs(diff)), diff < 0)
+      )
+    ];
+    if (diff < 0) children.push(e("div", { key: "alert", className: "mt-2 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-2.5 py-1.5" }, "⚠ Amount received exceeds total vehicle cost by ₹" + formatMoney(Math.abs(diff)) + "."));
+    if (accItems.length > 0) children.push(e("div", { key: "acc", className: "mt-2 pt-2 border-t border-slate-100" },
+      e("p", { className: "text-xs text-slate-400 mb-1" }, "Accessory details"),
+      e("ul", { className: "text-xs text-slate-700 space-y-0.5" }, accItems.map(function (a, i) { return e("li", { key: i }, (a.name || "Item") + " — ₹" + formatMoney(a.amount || 0)); }))
+    ));
+    return e("div", { key: en.id, className: "border border-slate-200 rounded-lg p-3" }, children);
+  }
+
+  function listRow(label, value, negative) {
+    return e("div", { key: label, className: "flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0" },
+      e("span", { className: "text-xs text-slate-400" }, label),
+      e("span", { className: "text-sm " + (negative ? "text-rose-600 font-semibold" : "text-slate-800 font-medium") }, value)
+    );
+  }
+
+  function buildEntryListItem(en) {
+    var diff = differenceOf(en);
+    var accItems = (en.accessories || []).filter(function (a) { return a && (a.name || a.amount); });
+    var rows = [
+      listRow("Invoice no", en.invoiceNo || "—"),
+      listRow("Invoice date", en.invoiceDate || "—"),
+      listRow("Customer name", en.customerName || "—"),
+      listRow("Mobile number", en.mobileNumber || "—"),
+      listRow("RC no", en.rcNo || "—"),
+      listRow("Registration date", en.registrationDate || "—"),
+      listRow("Down payment received", en.downPayment ? "₹" + formatMoney(en.downPayment) : "—"),
+      listRow("Ex-showroom amount", en.exShowroomAmount ? "₹" + formatMoney(en.exShowroomAmount) : "—"),
+      listRow("Insurance amount", en.insuranceAmount ? "₹" + formatMoney(en.insuranceAmount) : "—"),
+      listRow("Registration amount", en.registrationAmount ? "₹" + formatMoney(en.registrationAmount) : "—"),
+      listRow("Accessories total", accessoriesTotalOf(en.accessories) ? "₹" + formatMoney(accessoriesTotalOf(en.accessories)) : "—"),
+      listRow("Total vehicle cost", en.totalVehicleCost ? "₹" + formatMoney(en.totalVehicleCost) : "—"),
+      listRow("Loan bank", en.loanBank || "—"),
+      listRow("Disbursement amount", en.disbursementAmount ? "₹" + formatMoney(en.disbursementAmount) : "—"),
+      listRow("Disbursement date", en.disbursementDate || "—"),
+      listRow("Total amount received", "₹" + formatMoney(totalReceivedOf(en))),
+      listRow("Difference", (diff < 0 ? "-" : "") + "₹" + formatMoney(Math.abs(diff)), diff < 0)
+    ];
+    if (accItems.length > 0) {
+      rows.push(e("div", { key: "acc-hdr", className: "pt-2 mt-1" }, e("p", { className: "text-xs text-slate-400 mb-1" }, "Accessory details")));
+      accItems.forEach(function (a, i) {
+        rows.push(listRow("• " + (a.name || "Item"), "₹" + formatMoney(a.amount || 0)));
+      });
+    }
+    return e("div", { key: en.id, className: "glass-card rounded-xl p-4 shadow-[0_4px_12px_rgba(0,0,0,0.08)]" },
+      e("div", { className: "flex items-center justify-between mb-2" },
+        e("p", { className: "text-sm font-semibold text-slate-800" }, en.customerName || "Unnamed customer"),
+        e("div", { className: "flex items-center gap-3" },
+          e("button", { onClick: function () { editEntry(en); }, className: "text-slate-400 hover:text-slate-600 p-1.5 -m-1.5" }, "✏️"),
+          e("button", { onClick: function () { deleteEntry(en.id); }, className: "text-slate-400 hover:text-rose-600 p-1.5 -m-1.5" }, "🗑️")
+        )
+      ),
+      diff < 0 ? e("div", { className: "mb-2 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-2.5 py-1.5" }, "⚠ Amount received exceeds total vehicle cost by ₹" + formatMoney(Math.abs(diff)) + ".") : null,
+      e("div", null, rows)
+    );
+  }
+
+  var lookupCards = lookupResults.map(buildEntryCard);
+
+  var reminderBanner = (reminderVisible && incomplete.length > 0) ? e("div", {
+    className: "rounded-xl p-4 mb-5 border border-amber-300",
+    style: { background: "linear-gradient(145deg, #fffbeb, #fef3c7)", boxShadow: "0 10px 25px rgba(217,119,6,0.15)" }
+  },
+    e("div", { className: "flex items-start justify-between gap-3" },
+      e("div", null,
+        e("p", { className: "text-sm font-semibold text-amber-800" }, "⏰ Reminder: " + incomplete.length + " record(s) have missing details"),
+        e("ul", { className: "text-xs text-amber-700 mt-1.5 space-y-0.5" },
+          incomplete.slice(0, 5).map(function (x, i) {
+            return e("li", { key: i }, (x.entry.customerName || "Unnamed") + " — missing: " + x.missing.join(", "));
+          }),
+          incomplete.length > 5 ? e("li", { key: "more" }, "…and " + (incomplete.length - 5) + " more") : null
+        )
+      ),
+      e("button", { onClick: dismissReminder, className: "text-xs bg-white border border-amber-300 text-amber-800 rounded-lg px-3 py-1.5 whitespace-nowrap hover:bg-amber-100" }, "Got it, remind in 2 days")
+    )
+  ) : null;
+
+  var lookupSection = e("div", { className: "glass-card rounded-xl p-4 mb-5 shadow-[0_10px_25px_rgba(0,0,0,0.15)]" },
+    e("div", { className: "flex items-center gap-1.5 text-slate-700 text-sm font-medium mb-2" }, "🔍 Find customer by mobile, RC no, or invoice no"),
+    e("input", { type: "text", placeholder: "Enter mobile number, RC no, or invoice no", value: lookup, onChange: function (ev) { setLookup(ev.target.value); }, className: inputClass }),
+    lookup.trim() ? e("div", { className: "mt-3 space-y-3" }, lookupResults.length === 0 ? e("p", { className: "text-sm text-slate-400" }, 'No customer found for "' + lookup + '".') : lookupCards) : null
+  );
+
+  var formSection = e("div", { className: "glass-card rounded-xl p-4 mb-5 shadow-[0_10px_25px_rgba(0,0,0,0.15)]" },
+    e("div", { className: "flex items-center justify-between mb-3" },
+      e("div", { className: "flex items-center gap-1.5 text-slate-700 text-sm font-medium" }, "👤 " + (editingId ? "Edit record" : "New record")),
+      editingId ? e("button", { onClick: resetForm, className: "flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600" }, "✕ Cancel edit") : null
+    ),
+    e("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-3" }, FIELDS_TOP.map(function (f) { return e(LabeledInput, { key: f.key, field: f, value: form[f.key], onChange: setField }); })),
+    e("div", { className: "mt-4 border border-slate-200 rounded-lg p-3 bg-slate-50/60" },
+      e("div", { className: "flex items-center justify-between mb-2" },
+        e("label", { className: "text-xs font-medium text-slate-500" }, "Accessories (up to 6 items)"),
+        e("span", { className: "text-xs text-slate-500" }, "Total: ", e("span", { className: "font-medium text-slate-800" }, "₹" + formatMoney(formAccessoriesTotal)))
+      ),
+      e("div", { className: "space-y-2" }, form.accessories.map(function (item, i) {
+        return e("div", { key: i, className: "flex gap-2" },
+          e("input", { type: "text", placeholder: "Item " + (i + 1) + " e.g. Saddle stay, seat cover", value: item.name, onChange: function (ev) { updateAccessory(i, "name", ev.target.value); }, className: "flex-1 border border-slate-200 rounded-lg px-2.5 py-2.5 text-base text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400" }),
+          e("input", { type: "number", min: "0", step: "0.01", placeholder: "Amount", value: item.amount, onChange: function (ev) { updateAccessory(i, "amount", ev.target.value); }, className: "w-28 border border-slate-200 rounded-lg px-2.5 py-2.5 text-base text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400" })
+        );
+      }))
+    ),
+    e("div", { className: "mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3" },
+      e("div", { className: "rounded-xl p-3", style: { background: "linear-gradient(145deg, #f1f5f9, #e2e8f0)", boxShadow: "inset 0 1px 2px rgba(255,255,255,0.8), inset 0 -2px 4px rgba(0,0,0,0.06), 0 4px 10px rgba(0,0,0,0.06)" } },
+        e("p", { className: "text-xs font-medium text-slate-500" }, "Total vehicle cost"),
+        e("p", { className: "text-[11px] text-slate-400 mt-0.5" }, "Ex-showroom + insurance + registration + accessories"),
+        e("p", { className: "text-lg font-bold text-slate-800 mt-1" }, "₹" + formatMoney(formTotalVehicleCost))
+      ),
+      e("div", { className: "rounded-xl p-3", style: { background: "linear-gradient(145deg, #f1f5f9, #e2e8f0)", boxShadow: "inset 0 1px 2px rgba(255,255,255,0.8), inset 0 -2px 4px rgba(0,0,0,0.06), 0 4px 10px rgba(0,0,0,0.06)" } },
+        e("p", { className: "text-xs font-medium text-slate-500" }, "Total amount received"),
+        e("p", { className: "text-[11px] text-slate-400 mt-0.5" }, "Down payment + disbursement"),
+        e("p", { className: "text-lg font-bold text-slate-800 mt-1" }, "₹" + formatMoney(formTotalReceived))
+      ),
+      e("div", {
+        className: "rounded-xl p-3 border " + (formDifference < 0 ? "border-rose-300" : "border-transparent"),
+        style: formDifference < 0
+          ? { background: "linear-gradient(145deg, #fef2f2, #fecaca)", boxShadow: "inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 4px rgba(190,18,60,0.15), 0 4px 10px rgba(190,18,60,0.15)" }
+          : { background: "linear-gradient(145deg, #f1f5f9, #e2e8f0)", boxShadow: "inset 0 1px 2px rgba(255,255,255,0.8), inset 0 -2px 4px rgba(0,0,0,0.06), 0 4px 10px rgba(0,0,0,0.06)" }
+      },
+        e("p", { className: "text-xs font-medium " + (formDifference < 0 ? "text-rose-600" : "text-slate-500") }, "Difference"),
+        e("p", { className: "text-[11px] text-slate-400 mt-0.5" }, "Vehicle cost − amount received"),
+        e("p", { className: "text-lg font-bold mt-1 " + (formDifference < 0 ? "text-rose-700" : "text-slate-800") }, (formDifference < 0 ? "-" : "") + "₹" + formatMoney(Math.abs(formDifference))),
+        formDifference < 0 ? e("p", { className: "text-[11px] text-rose-600 mt-1" }, "⚠ Received exceeds vehicle cost") : null
+      )
+    ),
+    e("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3" }, FIELDS_BOTTOM.map(function (f) { return e(LabeledInput, { key: f.key, field: f, value: form[f.key], onChange: setField }); })),
+    e("div", { className: "flex items-center justify-end mt-4" },
+      e("button", { onClick: saveEntry, disabled: saving, className: btnDark }, saving ? "Saving…" : (editingId ? "✎ Save changes" : "＋ Add record"))
+    )
+  );
+
+  var filterSection = e("div", { className: "relative mb-3" },
+    e("span", { className: "absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" }, "🔍"),
+    e("input", { type: "text", placeholder: "Filter the list below by name, mobile, RC no, or bank", value: query, onChange: function (ev) { setQuery(ev.target.value); }, className: "w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2.5 text-base text-slate-800 glass-card focus:outline-none focus:ring-2 focus:ring-emerald-400" })
+  );
+
+  var tableHeaders = ["Invoice no", "Invoice date", "Customer", "Mobile", "RC no", "Reg. date", "Down payment", "Ex-showroom", "Insurance", "Reg. amount", "Accessories", "Vehicle cost", "Loan bank", "Disb. amount", "Disb. date", "Total received", "Difference", ""];
+  var rightAlignedHeaders = { "Down payment": 1, "Ex-showroom": 1, "Insurance": 1, "Reg. amount": 1, "Accessories": 1, "Vehicle cost": 1, "Disb. amount": 1, "Total received": 1, "Difference": 1 };
+  var theadRow = e("tr", { className: "border-b border-slate-200 text-left text-xs text-slate-500" }, tableHeaders.map(function (h, i) {
+    return e("th", { key: i, className: "py-2 px-3 font-medium whitespace-nowrap" + (rightAlignedHeaders[h] ? " text-right" : "") + (h === "" ? " w-14" : "") }, h);
+  }));
+  function buildTableRows(list) {
+    return list.map(function (en) {
+      var diff = differenceOf(en);
+      return e("tr", { key: en.id, className: "border-b border-slate-100 last:border-0 hover:bg-slate-50" + (diff < 0 ? " bg-rose-50" : "") },
+        e("td", { className: "py-2 px-3 text-slate-700 font-medium whitespace-nowrap" }, en.invoiceNo || "—"),
+        e("td", { className: "py-2 px-3 text-slate-600 whitespace-nowrap" }, en.invoiceDate || "—"),
+        e("td", { className: "py-2 px-3 text-slate-800 font-medium whitespace-nowrap" }, en.customerName),
+        e("td", { className: "py-2 px-3 text-slate-600 whitespace-nowrap" }, en.mobileNumber),
+        e("td", { className: "py-2 px-3 text-slate-600 whitespace-nowrap" }, en.rcNo || "—"),
+        e("td", { className: "py-2 px-3 text-slate-600 whitespace-nowrap" }, en.registrationDate || "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, en.downPayment ? "₹" + formatMoney(en.downPayment) : "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, en.exShowroomAmount ? "₹" + formatMoney(en.exShowroomAmount) : "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, en.insuranceAmount ? "₹" + formatMoney(en.insuranceAmount) : "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, en.registrationAmount ? "₹" + formatMoney(en.registrationAmount) : "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, accessoriesTotalOf(en.accessories) ? "₹" + formatMoney(accessoriesTotalOf(en.accessories)) : "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, en.totalVehicleCost ? "₹" + formatMoney(en.totalVehicleCost) : "—"),
+        e("td", { className: "py-2 px-3 text-slate-600 whitespace-nowrap" }, en.loanBank || "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, en.disbursementAmount ? "₹" + formatMoney(en.disbursementAmount) : "—"),
+        e("td", { className: "py-2 px-3 text-slate-600 whitespace-nowrap" }, en.disbursementDate || "—"),
+        e("td", { className: "py-2 px-3 text-right text-slate-700 whitespace-nowrap" }, "₹" + formatMoney(totalReceivedOf(en))),
+        e("td", { className: "py-2 px-3 text-right font-medium whitespace-nowrap " + (diff < 0 ? "text-rose-700" : "text-slate-700") }, (diff < 0 ? "⚠ -" : "") + "₹" + formatMoney(Math.abs(diff))),
+        e("td", { className: "py-2 px-3" }, e("div", { className: "flex items-center gap-3 justify-end" },
+          e("button", { onClick: function () { editEntry(en); }, className: "text-slate-400 hover:text-slate-600 p-1.5 -m-1.5" }, "✏️"),
+          e("button", { onClick: function () { deleteEntry(en.id); }, className: "text-slate-400 hover:text-rose-600 p-1.5 -m-1.5" }, "🗑️")
+        ))
+      );
+    });
+  }
+  var tbodyRows = buildTableRows(filtered);
+
+  var tableSection = e("div", null,
+    e("p", { className: "text-[11px] text-slate-400 mb-1.5 sm:hidden" }, "← Swipe the table to see more columns →"),
+    e("div", { className: "glass-card rounded-xl overflow-hidden overflow-x-auto shadow-[0_10px_25px_rgba(0,0,0,0.15)]", style: { WebkitOverflowScrolling: "touch" } },
+      filtered.length === 0
+        ? e("div", { className: "text-center py-10 text-slate-400 text-sm" }, entries.length === 0 ? "No records yet. Add your first customer above." : "No records match your search.")
+        : e("table", { className: "w-full text-sm min-w-[1800px]" }, e("thead", null, theadRow), e("tbody", null, tbodyRows))
+    )
+  );
+
+  var footer = e("div", { className: "text-center mt-6 pb-8 select-none" }, e("p", { className: "text-[11px] text-slate-400 tracking-wide" }, "© Mintu Borah Creation — All rights reserved"));
+
+  var detailsFilterModeSelect = e("select", {
+    value: detailsFilterMode,
+    onChange: function (ev) { setDetailsFilterMode(ev.target.value); setDetailsFilterValue(""); },
+    className: "border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+  },
+    e("option", { value: "all" }, "All records"),
+    e("option", { value: "year" }, "By year"),
+    e("option", { value: "month" }, "By month"),
+    e("option", { value: "date" }, "By exact date")
+  );
+
+  var detailsFilterValueControl =
+    detailsFilterMode === "year" ? e("select", {
+      value: detailsFilterValue, onChange: function (ev) { setDetailsFilterValue(ev.target.value); },
+      className: "border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+    },
+      e("option", { value: "" }, "Select year…"),
+      availableYears.map(function (y) { return e("option", { key: y, value: y }, y); })
+    )
+    : detailsFilterMode === "month" ? e("input", {
+      type: "month", value: detailsFilterValue, onChange: function (ev) { setDetailsFilterValue(ev.target.value); },
+      className: "border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+    })
+    : detailsFilterMode === "date" ? e("input", {
+      type: "date", value: detailsFilterValue, onChange: function (ev) { setDetailsFilterValue(ev.target.value); },
+      className: "border border-slate-200 rounded-lg px-2.5 py-2 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+    })
+    : null;
+
+  var viewModeToggle = e("div", { className: "flex items-center gap-1 bg-slate-100 rounded-lg p-1" },
+    ["list", "grid", "table"].map(function (mode) {
+      var labels = { list: "☰ List", grid: "▦ Grid", table: "▤ Table" };
+      var active = detailsViewMode === mode;
+      return e("button", {
+        key: mode,
+        onClick: function () { setDetailsViewMode(mode); },
+        className: "text-xs font-medium px-3 py-1.5 rounded-md transition-colors " + (active ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700")
+      }, labels[mode]);
+    })
+  );
+
+  var detailsContent;
+  if (detailsFiltered.length === 0) {
+    detailsContent = e("div", { className: "glass-card rounded-xl text-center py-10 text-slate-400 text-sm shadow-[0_10px_25px_rgba(0,0,0,0.15)]" }, "No records match this filter.");
+  } else if (detailsViewMode === "grid") {
+    detailsContent = e("div", { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" },
+      detailsFiltered.map(function (en) {
+        var card = buildEntryCard(en);
+        return e("div", { key: en.id, className: "bg-white rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.08)]" }, card);
+      })
+    );
+  } else if (detailsViewMode === "table") {
+    detailsContent = e("div", null,
+      e("p", { className: "text-[11px] text-slate-400 mb-1.5 sm:hidden" }, "← Swipe the table to see more columns →"),
+      e("div", { className: "glass-card rounded-xl overflow-hidden overflow-x-auto shadow-[0_10px_25px_rgba(0,0,0,0.15)]", style: { WebkitOverflowScrolling: "touch" } },
+        e("table", { className: "w-full text-sm min-w-[1800px]" }, e("thead", null, theadRow), e("tbody", null, buildTableRows(detailsFiltered)))
+      )
+    );
+  } else {
+    detailsContent = e("div", { className: "space-y-3" }, detailsFiltered.map(buildEntryListItem));
+  }
+
+  var detailsPageSection = e("div", null,
+    e("div", { className: "glass-card rounded-xl p-4 mb-5 shadow-[0_10px_25px_rgba(0,0,0,0.15)]" },
+      e("div", { className: "flex items-center justify-between flex-wrap gap-2 mb-3" },
+        e("div", { className: "flex items-center gap-1.5 text-slate-700 text-sm font-medium" }, "📋 All customer records"),
+        viewModeToggle
+      ),
+      e("div", { className: "flex items-center gap-2 flex-wrap mb-2" }, detailsFilterModeSelect, detailsFilterValueControl),
+      e("p", { className: "text-xs text-slate-400" }, detailsFiltered.length + " record(s) match" + (detailsFilterMode !== "all" && detailsFilterValue ? " this filter" : ""))
+    ),
+    detailsContent
+  );
+
+  if (view === "details") {
+    return e("div", { className: "max-w-4xl mx-auto p-4 sm:p-6" }, header, detailsPageSection, footer);
+  }
+
+  return e("div", { className: "max-w-4xl mx-auto p-4 sm:p-6" }, header, reminderBanner, lookupSection, formSection, filterSection, tableSection, footer);
+}
+
+/* ===================== Root (Supabase auth gate) ===================== */
+function Root() {
+  var stateState = useState("checking"); var authState = stateState[0], setAuthState = stateState[1];
+  var emailState = useState(""); var userEmail = emailState[0], setUserEmail = emailState[1];
+
+  useEffect(function () {
+    sb.auth.getSession().then(function (result) {
+      var session = result.data && result.data.session;
+      if (session) { setUserEmail(session.user.email); setAuthState("app"); }
+      else { setAuthState("login"); }
+    });
+    var sub = sb.auth.onAuthStateChange(function (event, session) {
+      if (session) { setUserEmail(session.user.email); setAuthState("app"); }
+      else { setAuthState("login"); }
+    });
+    return function () { sub.data.subscription.unsubscribe(); };
+  }, []);
+
+  async function handleLogout() {
+    await sb.auth.signOut();
+    setAuthState("login");
+  }
+
+  if (authState === "checking") return e("div", { className: "min-h-screen flex items-center justify-center text-slate-400", style: { background: "#0f172a" } }, "Loading…");
+  if (authState === "login") return e(AuthScreen, { onLoginSuccess: function () {} });
+  return e("div", { style: { background: "linear-gradient(180deg, #f8fafc, #eef2f6)", minHeight: "100vh" } }, e(MainApp, { userEmail: userEmail, onLogout: handleLogout }));
+}
+
+var rootEl = document.getElementById("root");
+if (typeof ReactDOM.createRoot === "function") { ReactDOM.createRoot(rootEl).render(e(Root)); }
+else { ReactDOM.render(e(Root), rootEl); }
+</script>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("service-worker.js").catch(function () {});
+    });
+  }
+</script>
+</body>
+</html>

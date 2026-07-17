@@ -1,0 +1,15 @@
+{
+  "name": "Dealer Customer Record",
+  "short_name": "DCR",
+  "description": "Customer and vehicle deal records for the showroom, by Mintu Borah",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e293b",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
